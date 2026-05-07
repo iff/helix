@@ -383,6 +383,7 @@ impl MappableCommand {
         search_selection_detect_word_boundaries, "Use current selection as the search pattern, automatically wrapping with `\\b` on word boundaries",
         make_search_word_bounded, "Modify current search to make it word bounded",
         global_search, "Global search in workspace folder",
+        buffer_search, "Search in current buffer",
         extend_line, "Select current line, if already selected, extend to another line based on the anchor",
         extend_line_below, "Select current line, if already selected, extend to next line",
         extend_line_above, "Select current line, if already selected, extend to previous line",
@@ -2785,6 +2786,68 @@ fn global_search(cx: &mut Context) {
     )
     .with_history_register(Some(reg))
     .with_dynamic_query(get_files, Some(275));
+
+    cx.push_layer(Box::new(overlaid(picker)));
+}
+
+fn buffer_search(cx: &mut Context) {
+    #[derive(Debug)]
+    struct BufferLine {
+        line_number: usize,
+        content: String,
+    }
+
+    let (doc_id, lines) = {
+        let (_, doc) = current!(cx.editor);
+        let lines = doc
+            .text()
+            .lines()
+            .enumerate()
+            .map(|(i, line)| BufferLine {
+                line_number: i,
+                content: line.chunks().collect::<String>().trim_end().to_string(),
+            })
+            .collect::<Vec<_>>();
+        (doc.id(), lines)
+    };
+
+    // TODO syntax highlighting and colors?
+    let columns = [
+        PickerColumn::new("line", |item: &BufferLine, _| {
+            Cell::from(Spans::from(vec![
+                Span::from((item.line_number + 1).to_string()),
+                Span::from(":"),
+            ]))
+        })
+        .without_filtering(),
+        PickerColumn::new("contents", |item: &BufferLine, _| {
+            Cell::from(item.content.as_str())
+        }),
+    ];
+
+    let picker = Picker::new(
+        columns,
+        1,
+        lines,
+        (),
+        move |cx, item: &BufferLine, action| {
+            cx.editor.switch(doc_id, action);
+            let (view, doc) = current!(cx.editor);
+            let text = doc.text();
+            let line_number = item.line_number;
+            if line_number >= text.len_lines() {
+                cx.editor
+                    .set_error("The selected line does not exist anymore: has the buffer changed?");
+                return;
+            }
+            let start = text.line_to_char(line_number);
+            let end = text.line_to_char((line_number + 1).min(text.len_lines()));
+            doc.set_selection(view.id, Selection::single(start, end));
+            if action.align_view(view, doc.id()) {
+                align_view(doc, view, Align::Center);
+            }
+        },
+    );
 
     cx.push_layer(Box::new(overlaid(picker)));
 }
